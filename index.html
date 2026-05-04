@@ -191,13 +191,11 @@
                     .then(() => completeAd())
                     .catch(err => {
                         console.error('Ad Error:', err);
-                        alert('Ad failed to load. Please disable AdBlocker and try again.');
+                        Telegram.WebApp.showAlert('Ad failed to load. Please disable AdBlocker and try again.');
                         resetBtn();
                     });
             } else {
-                // If SDK isn't working, let's fake completion for local testing if needed,
-                // but usually we alert them.
-                alert('Ad SDK not found. Please refresh or disable AdBlock.');
+                Telegram.WebApp.showAlert('Ad SDK not found. Please refresh or disable AdBlock.');
                 resetBtn();
             }
         }
@@ -226,22 +224,21 @@
                     if (data.action === 'unlocked') {
                         showSuccess();
                     } else if (data.action === 'progress') {
-                        // User needs to watch more ads
-                        alert('Great! You have watched ' + data.watched + ' out of ' + data.required + ' required ads. Keep going!');
+                        // Silently update UI — bot message already updated in Telegram
                         resetBtn();
                         adProgress.style.width = '0%';
-                        document.getElementById('subtitleText').textContent = 'Progress: ' + data.watched + '/' + data.required + ' ads watched.';
+                        document.getElementById('subtitleText').textContent = '✅ Ad ' + data.watched + '/' + data.required + ' done! Watch ' + (data.required - data.watched) + ' more to unlock.';
                     }
                 } else if (data.status === 'already_used') {
                     showUsed();
                 } else {
-                    alert('Error: ' + data.message);
+                    Telegram.WebApp.showAlert('Error: ' + data.message);
                     resetBtn();
                     adProgress.style.width = '0%';
                 }
             } catch (err) {
                 console.error('Network error:', err);
-                alert('Network error. Is the server running?');
+                Telegram.WebApp.showAlert('Network error. Please try again.');
                 resetBtn();
                 adProgress.style.width = '0%';
             }
