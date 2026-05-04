@@ -22,10 +22,10 @@ log = logging.getLogger("MAIN")
 
 load_dotenv()
 
-BOT_TOKEN          = os.getenv("BOT_TOKEN")
-SUPABASE_URL       = os.getenv("SUPABASE_URL")
-SUPABASE_KEY       = os.getenv("SUPABASE_KEY")
-PRIVATE_CHANNEL_ID = int(os.getenv("PRIVATE_CHANNEL_ID", 0))
+BOT_TOKEN          = os.getenv("BOT_TOKEN", "8611336689:AAFhZoLT8X0_Ip0PFmRuCdMs_hKe94rs_eA")
+SUPABASE_URL       = os.getenv("SUPABASE_URL", "https://zknqlbvxtujuylfzvkrz.supabase.co")
+SUPABASE_KEY       = os.getenv("SUPABASE_KEY", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InprbnFsYnZ4dHVqdXlsZnp2a3J6Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3NzgxNTA3MCwiZXhwIjoyMDkzMzkxMDcwfQ.HuOHXkZdalLHd1ApIjeShsqipPQvbECQU09v2Q-MeFs")
+PRIVATE_CHANNEL_ID = int(os.getenv("PRIVATE_CHANNEL_ID", "-1003728263573"))
 WEB_DOMAIN         = os.getenv("WEB_DOMAIN", "https://your-domain.com")
 PORT               = int(os.getenv("PORT", 8080))
 
