@@ -131,14 +131,30 @@ async def handle_start(message: types.Message):
             web_app=WebAppInfo(url=app_url)
         )
     ]])
-    sent = await message.answer(
+    locked_text = (
         f"🔒 *File Locked!*\n\n"
         f"Watch *{required_ads} ad(s)* to unlock this file.\n"
         f"Progress: {ads_watched}/{required_ads} ads watched.\n\n"
-        f"Tap the button below to watch an ad 👇",
-        parse_mode="Markdown",
-        reply_markup=markup
+        f"Tap the button below to watch an ad 👇"
     )
+
+    existing_msg_id = session.get("bot_message_id")
+    if existing_msg_id:
+        # Message already sent — just edit it (prevents double messages)
+        try:
+            await bot.edit_message_text(
+                chat_id=user_id,
+                message_id=existing_msg_id,
+                text=locked_text,
+                parse_mode="Markdown",
+                reply_markup=markup
+            )
+            return
+        except Exception:
+            pass  # If edit fails, fall through and send a new message
+
+    # Send fresh message
+    sent = await message.answer(locked_text, parse_mode="Markdown", reply_markup=markup)
     # Save message_id so we can edit it later
     try:
         supabase.table("user_sessions").update(
