@@ -270,6 +270,15 @@ async def handle_ad_completed(request):
             }).eq("id", session_id).execute()
 
             try:
+                # Delete the "File Locked" message first
+                bot_message_id = session.get("bot_message_id")
+                if bot_message_id:
+                    try:
+                        await bot.delete_message(chat_id=user_id, message_id=bot_message_id)
+                    except Exception:
+                        pass  # Ignore if already deleted
+
+                # Send the unlocked video
                 await bot.copy_message(
                     chat_id=user_id,
                     from_chat_id=PRIVATE_CHANNEL_ID,
