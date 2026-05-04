@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Unlock Your File</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg:      #0f172a;
+            --primary: #3b82f6;
+            --accent:  #8b5cf6;
+            --text:    #f8fafc;
+            --muted:   #94a3b8;
+            --glass:   rgba(30, 41, 59, 0.75);
+            --border:  rgba(255, 255, 255, 0.1);
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Inter', sans-serif; }
+
+        body {
+            background-color: var(--bg);
+            background-image:
+                radial-gradient(circle at 15% 50%, rgba(59,130,246,.18) 0%, transparent 55%),
+                radial-gradient(circle at 85% 30%, rgba(139,92,246,.18) 0%, transparent 55%);
+            color: var(--text);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .card {
+            background: var(--glass);
+            backdrop-filter: blur(18px);
+            -webkit-backdrop-filter: blur(18px);
+            border: 1px solid var(--border);
+            border-radius: 24px;
+            padding: 36px 32px;
+            width: 92%;
+            max-width: 420px;
+            text-align: center;
+            box-shadow: 0 30px 60px -12px rgba(0,0,0,.55);
+        }
+
+        .title {
+            font-size: 26px;
+            font-weight: 800;
+            background: linear-gradient(to right, var(--primary), var(--accent));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 8px;
+        }
+
+        .subtitle {
+            color: var(--muted);
+            font-size: 14px;
+            margin-bottom: 28px;
+            line-height: 1.6;
+        }
+
+        .ad-box {
+            background: #0a0f1e;
+            border-radius: 16px;
+            height: 180px;
+            position: relative;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+            border: 1px solid var(--border);
+            margin-bottom: 24px;
+        }
+
+        .ad-label {
+            color: #475569;
+            font-weight: 600;
+            font-size: 13px;
+            letter-spacing: 1.5px;
+            text-transform: uppercase;
+        }
+
+        .ad-progress {
+            position: absolute;
+            bottom: 0; left: 0;
+            height: 3px;
+            background: linear-gradient(90deg, var(--primary), var(--accent));
+            width: 0%;
+            transition: width .2s linear;
+        }
+
+        .btn {
+            background: linear-gradient(135deg, var(--primary), var(--accent));
+            color: #fff;
+            border: none;
+            padding: 15px 28px;
+            border-radius: 12px;
+            font-size: 15px;
+            font-weight: 700;
+            cursor: pointer;
+            width: 100%;
+            transition: transform .2s, box-shadow .2s, opacity .2s;
+            box-shadow: 0 4px 20px rgba(139, 93, 246, 0.4);
+        }
+        .btn:hover:not(:disabled) { transform: translateY(-2px); box-shadow: 0 8px 28px rgba(139,92,246,.6); }
+        .btn:disabled { opacity: .45; cursor: not-allowed; transform: none; }
+
+        #successScreen, #usedScreen { display: none; animation: fadeUp .6s ease; }
+        .success-emoji { font-size: 72px; margin-bottom: 16px; animation: bounceIn .7s cubic-bezier(.175,.885,.32,1.275); }
+        .note {
+            font-size: 13px;
+            color: var(--muted);
+            margin-top: 10px;
+            line-height: 1.5;
+        }
+
+        @keyframes bounceIn {
+            0%   { transform: scale(0); opacity: 0; }
+            60%  { transform: scale(1.15); }
+            100% { transform: scale(1); opacity: 1; }
+        }
+        @keyframes fadeUp {
+            from { transform: translateY(20px); opacity: 0; }
+            to   { transform: translateY(0);    opacity: 1; }
+        }
+    </style>
+    <!-- Ad Network SDK -->
+    <script src='//libtl.com/sdk.js' data-zone='9545978' data-sdk='show_9545978'></script>
+</head>
+<body>
+    <div class="card" id="mainCard">
+
+        <!-- Main screen -->
+        <div id="mainScreen">
+            <p class="title">Unlock Your File 🎁</p>
+            <p class="subtitle" id="subtitleText">Watch the sponsor message below to progress your unlock.</p>
+
+            <div class="ad-box" id="adBox">
+                <span class="ad-label" id="adLabel">Sponsor Advertisement</span>
+                <div class="ad-progress" id="adProgress"></div>
+            </div>
+
+            <button class="btn" id="startBtn" onclick="watchAd()">📺 Watch Ad</button>
+        </div>
+
+        <!-- Success screen (shown after required ads complete) -->
+        <div id="successScreen">
+            <div class="success-emoji">🎉</div>
+            <p class="title">File Unlocked!</p>
+            <p class="subtitle">You have successfully watched all required ads.</p>
+            <p class="note">📱 Check your Telegram — the bot has sent the file. (It expires in 30 mins)</p>
+            <button class="btn" style="margin-top:20px;" onclick="Telegram.WebApp.close()">Close App</button>
+        </div>
+
+        <!-- Used/Expired screen -->
+        <div id="usedScreen">
+            <div class="success-emoji">🚫</div>
+            <p class="title" style="background:linear-gradient(to right,#ef4444,#f97316);-webkit-background-clip:text;">Already Unlocked</p>
+            <p class="subtitle" style="margin-top:12px;">This link is already completed or expired.</p>
+            <button class="btn" style="margin-top:20px;" onclick="Telegram.WebApp.close()">Close App</button>
+        </div>
+
+    </div>
+
+    <!-- Telegram Web App Script to close the window easily -->
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js"></script>
+    <script>
+        const params = new URLSearchParams(window.location.search);
+        const sessionId = params.get('session');
+
+        const startBtn = document.getElementById('startBtn');
+        const adLabel = document.getElementById('adLabel');
+        const adProgress = document.getElementById('adProgress');
+
+        if (!sessionId) {
+            startBtn.disabled = true;
+            startBtn.textContent = '⚠️ Invalid Link';
+            document.getElementById('subtitleText').textContent = 'Session missing. Please open from Telegram Bot.';
+        }
+
+        function watchAd() {
+            if (!sessionId) return;
+
+            startBtn.disabled = true;
+            startBtn.textContent = '⏳ Loading Ad...';
+            adLabel.textContent  = 'Loading Sponsor...';
+
+            if (typeof show_9545978 === 'function') {
+                show_9545978()
+                    .then(() => completeAd())
+                    .catch(err => {
+                        console.error('Ad Error:', err);
+                        alert('Ad failed to load. Please disable AdBlocker and try again.');
+                        resetBtn();
+                    });
+            } else {
+                // If SDK isn't working, let's fake completion for local testing if needed,
+                // but usually we alert them.
+                alert('Ad SDK not found. Please refresh or disable AdBlock.');
+                resetBtn();
+            }
+        }
+
+        function resetBtn() {
+            startBtn.disabled = false;
+            startBtn.textContent = '📺 Watch Ad';
+            adLabel.textContent = 'Sponsor Advertisement';
+        }
+
+        async function completeAd() {
+            adLabel.textContent = 'Processing...';
+            adProgress.style.width = '50%';
+            startBtn.textContent = 'Verifying...';
+
+            try {
+                const res = await fetch('/ad-completed', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ session: sessionId })
+                });
+                const data = await res.json();
+                adProgress.style.width = '100%';
+
+                if (data.status === 'success') {
+                    if (data.action === 'unlocked') {
+                        showSuccess();
+                    } else if (data.action === 'progress') {
+                        // User needs to watch more ads
+                        alert('Great! You have watched ' + data.watched + ' out of ' + data.required + ' required ads. Keep going!');
+                        resetBtn();
+                        adProgress.style.width = '0%';
+                        document.getElementById('subtitleText').textContent = 'Progress: ' + data.watched + '/' + data.required + ' ads watched.';
+                    }
+                } else if (data.status === 'already_used') {
+                    showUsed();
+                } else {
+                    alert('Error: ' + data.message);
+                    resetBtn();
+                    adProgress.style.width = '0%';
+                }
+            } catch (err) {
+                console.error('Network error:', err);
+                alert('Network error. Is the server running?');
+                resetBtn();
+                adProgress.style.width = '0%';
+            }
+        }
+
+        function showSuccess() {
+            confetti({ particleCount: 120, spread: 80, origin: { y: 0.6 } });
+            document.getElementById('mainScreen').style.display = 'none';
+            document.getElementById('successScreen').style.display = 'block';
+        }
+
+        function showUsed() {
+            document.getElementById('mainScreen').style.display = 'none';
+            document.getElementById('usedScreen').style.display = 'block';
+        }
+    </script>
+</body>
+</html>
