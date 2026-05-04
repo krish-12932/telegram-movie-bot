@@ -131,7 +131,7 @@ async def handle_start(message: types.Message):
             web_app=WebAppInfo(url=app_url)
         )
     ]])
-    await message.answer(
+    sent = await message.answer(
         f"🔒 *File Locked!*\n\n"
         f"Watch *{required_ads} ad(s)* to unlock this file.\n"
         f"Progress: {ads_watched}/{required_ads} ads watched.\n\n"
@@ -139,6 +139,13 @@ async def handle_start(message: types.Message):
         parse_mode="Markdown",
         reply_markup=markup
     )
+    # Save message_id so we can edit it later
+    try:
+        supabase.table("user_sessions").update(
+            {"bot_message_id": sent.message_id}
+        ).eq("id", session_id).execute()
+    except Exception as e:
+        log.warning(f"Could not save bot_message_id: {e}")
 
 
 # ── Admin: Receive file ───────────────────────────────────────────────────────
@@ -287,11 +294,26 @@ async def handle_ad_completed(request):
                         web_app=WebAppInfo(url=app_url)
                     )
                 ]])
-                await bot.send_message(
-                    chat_id=user_id,
-                    text=f"✅ Ad {ads_watched}/{required_ads} done! Watch {required_ads - ads_watched} more to unlock.",
-                    reply_markup=markup
-                )
+                bot_message_id = session.get("bot_message_id")
+                if bot_message_id:
+                    # Edit the existing message instead of sending a new one
+                    await bot.edit_message_text(
+                        chat_id=user_id,
+                        message_id=bot_message_id,
+                        text=f"🔒 *File Locked!*\n\n"
+                             f"Progress: {ads_watched}/{required_ads} ads watched.\n"
+                             f"✅ Ad {ads_watched} done! Watch {required_ads - ads_watched} more to unlock.\n\n"
+                             f"Tap the button below to watch the next ad 👇",
+                        parse_mode="Markdown",
+                        reply_markup=markup
+                    )
+                else:
+                    # Fallback: send new message if message_id not saved
+                    await bot.send_message(
+                        chat_id=user_id,
+                        text=f"✅ Ad {ads_watched}/{required_ads} done! Watch {required_ads - ads_watched} more to unlock.",
+                        reply_markup=markup
+                    )
             except Exception as e:
                 log.error(f"Error notifying progress: {e}")
 
