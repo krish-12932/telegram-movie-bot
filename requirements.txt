@@ -1,5 +1,8 @@
 aiogram==3.7.0
-aiohttp
+aiohttp==3.9.5
 supabase==2.3.0
 python-dotenv
 shortuuid
+pydantic==2.6.4
+pydantic-core==2.16.3
+
