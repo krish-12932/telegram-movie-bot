@@ -188,14 +188,58 @@ async def handle_start(message: types.Message):
         log.warning(f"Could not save bot_message_id: {e}")
 
 
+# ── Help Command ────────────────────────────────────────────────────────────
+@dp.message(Command("help"))
+async def handle_help(message: types.Message):
+    user_id = message.from_user.id
+    # Ensure ADMIN_IDS is a set for faster lookup
+    is_admin = user_id in ADMIN_IDS
+
+    if is_admin:
+        help_text = (
+            "🛠 *Admin Help Menu*\n\n"
+            "*Management Commands:*\n"
+            "• `/files` - List all uploaded files & links\n"
+            "• `/del <code>` - Delete a file\n"
+            "• `/stats` - Real-time bot statistics\n\n"
+            "*Uploading:*\n"
+            "• Just send a video/file to start the upload process.\n\n"
+            "*User Commands:*\n"
+            "• `/start` - Welcome message\n"
+            "• `/start <code>` - Request a file"
+        )
+    else:
+        help_text = (
+            "👤 *User Help Menu*\n\n"
+            "• `/start` - Welcome message\n"
+            "• `/start <code>` - Use a link to get a file\n"
+            "• `/help` - Show this menu\n\n"
+            "Note: Files expire 30 minutes after unlocking."
+        )
+    
+    await message.answer(help_text, parse_mode="Markdown")
+
+
 # ── Admin: Receive file ───────────────────────────────────────────────────────
 @dp.message(F.from_user.id.in_(set(ADMIN_IDS)) & (F.video | F.document | F.audio | F.photo))
 async def handle_admin_file(message: types.Message, state: FSMContext):
     log.info(f"Admin {message.from_user.id} sent a file")
-    await state.update_data(original_message_id=message.message_id)
+    
+    # Extract file name
+    file_name = "Unknown File"
+    if message.video:
+        file_name = message.video.file_name or message.caption or "Video"
+    elif message.document:
+        file_name = message.document.file_name or message.caption or "Document"
+    elif message.audio:
+        file_name = message.audio.title or message.audio.file_name or "Audio"
+    elif message.photo:
+        file_name = message.caption or "Photo"
+
+    await state.update_data(original_message_id=message.message_id, file_name=file_name)
     await state.set_state(AdminStates.waiting_for_ads_count)
     await message.answer(
-        "✅ File received!\n\n"
+        f"✅ *File Received!* \n📄 Name: `{file_name}`\n\n"
         "Reply with the number of ads required to unlock this file.\n"
         "Example: `1`, `2`, `3` or `5`",
         parse_mode="Markdown"
@@ -229,11 +273,13 @@ async def handle_ads_count(message: types.Message, state: FSMContext):
 
     # Save to Supabase
     file_code = shortuuid.uuid()[:8]
+    file_name = data.get("file_name", "Unknown")
     try:
         supabase.table("files").insert({
             "file_code":    file_code,
             "message_id":   channel_message_id,
-            "required_ads": required_ads
+            "required_ads": required_ads,
+            "file_name":    file_name
         }).execute()
 
         me = await bot.get_me()
@@ -262,6 +308,8 @@ async def handle_list_files(message: types.Message):
         me = await bot.get_me()
         for f in res.data:
             link = f"https://t.me/{me.username}?start={f['file_code']}"
+            name = f.get("file_name") or "Unnamed File"
+            text += f"📄 *{name}*\n"
             text += f"• Code: `{f['file_code']}` | Ads: *{f['required_ads']}*\n🔗 [Link]({link})\n\n"
 
         # Split if text too long
@@ -291,10 +339,21 @@ async def handle_delete_file(message: types.Message):
             await message.answer(f"❌ File with code `{file_code}` not found.")
             return
 
-        # Delete
+        file_data = res.data[0]
+        channel_message_id = file_data.get("message_id")
+
+        # 1. Try to delete from the private channel
+        if channel_message_id:
+            try:
+                await bot.delete_message(chat_id=PRIVATE_CHANNEL_ID, message_id=channel_message_id)
+                log.info(f"Deleted message {channel_message_id} from private channel")
+            except Exception as e:
+                log.warning(f"Could not delete message {channel_message_id} from channel: {e}")
+
+        # 2. Delete from database
         supabase.table("files").delete().eq("file_code", file_code).execute()
-        # Note: We don't delete from the private channel to keep it as a backup
-        await message.answer(f"✅ File `{file_code}` deleted from bot database.")
+        
+        await message.answer(f"✅ File `{file_code}` deleted from both database and private channel.")
     except Exception as e:
         log.error(f"Error deleting file: {e}")
         await message.answer("❌ Error deleting file.")
@@ -331,11 +390,13 @@ async def handle_stats(message: types.Message):
         await message.answer("❌ Error fetching statistics.")
 
 
+
+
 # ── Catch-all for unauthorized users ─────────────────────────────────────────
 @dp.message(~F.from_user.id.in_(set(ADMIN_IDS)))
 async def handle_unauthorized(message: types.Message):
-    if message.text and (message.text.startswith("/start") or message.text.startswith("/stats") or message.text.startswith("/files") or message.text.startswith("/del")):
-        if message.text.startswith("/start"):
+    if message.text and (message.text.startswith("/start") or message.text.startswith("/stats") or message.text.startswith("/files") or message.text.startswith("/del") or message.text.startswith("/help")):
+        if message.text.startswith("/start") or message.text.startswith("/help"):
             return
         await message.answer(
             f"⚠️ You are not an admin.\nYour Telegram ID: `{message.from_user.id}`",
