@@ -104,6 +104,21 @@ async def handle_start(message: types.Message):
     ads_watched  = session["ads_watched"]
     required_ads = file_data["required_ads"]
 
+    # --- NEW: Direct Unlock if 0 Ads ---
+    if status == "pending" and required_ads == 0:
+        now = datetime.now(timezone.utc)
+        expires_at = now + timedelta(minutes=30)
+        
+        # Update session to unlocked
+        supabase.table("user_sessions").update({
+            "status": "unlocked",
+            "unlocked_at": now.isoformat(),
+            "expires_at": expires_at.isoformat()
+        }).eq("id", session_id).execute()
+        
+        status = "unlocked" # Continue to the next block to send file
+    # -----------------------------------
+
     if status == "unlocked":
         expires_at_str = session.get("expires_at")
         if expires_at_str:
@@ -111,13 +126,22 @@ async def handle_start(message: types.Message):
             if datetime.now(timezone.utc) > expires_at:
                 await message.answer("⏰ Your 30-minute access to this file has expired.")
                 return
+        
         # Send the file
         try:
-            await bot.copy_message(
+            sent_video = await bot.copy_message(
                 chat_id=user_id,
                 from_chat_id=PRIVATE_CHANNEL_ID,
-                message_id=file_data["message_id"]
+                message_id=file_data["message_id"],
+                caption="🎉 *Unlocked!* Here is your file.\n\n⚠️ Expires in 30 minutes.",
+                parse_mode="Markdown"
             )
+            
+            # Save message ID for auto-deletion
+            supabase.table("user_sessions").update({
+                "file_message_id": sent_video.message_id
+            }).eq("id", session_id).execute()
+            
         except Exception as e:
             log.error(f"Error sending file: {e}")
             await message.answer("❌ Could not send the file. Contact admin.")
