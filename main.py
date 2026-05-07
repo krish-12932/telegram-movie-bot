@@ -225,15 +225,100 @@ async def handle_ads_count(message: types.Message, state: FSMContext):
         await message.answer("❌ Failed to save to database.")
 
 
+# ── Admin: List Files ───────────────────────────────────────────────────────
+@dp.message(F.from_user.id.in_(set(ADMIN_IDS)), Command("files"))
+async def handle_list_files(message: types.Message):
+    try:
+        res = supabase.table("files").select("*").order("created_at", desc=True).execute()
+        if not res.data:
+            await message.answer("📂 No files found in database.")
+            return
+
+        text = "📂 *Your Uploaded Files:*\n\n"
+        me = await bot.get_me()
+        for f in res.data:
+            link = f"https://t.me/{me.username}?start={f['file_code']}"
+            text += f"• Code: `{f['file_code']}` | Ads: *{f['required_ads']}*\n🔗 [Link]({link})\n\n"
+
+        # Split if text too long
+        if len(text) > 4000:
+            for i in range(0, len(text), 4000):
+                await message.answer(text[i:i+4000], parse_mode="Markdown", disable_web_page_preview=True)
+        else:
+            await message.answer(text, parse_mode="Markdown", disable_web_page_preview=True)
+    except Exception as e:
+        log.error(f"Error listing files: {e}")
+        await message.answer("❌ Error fetching files.")
+
+
+# ── Admin: Delete File ──────────────────────────────────────────────────────
+@dp.message(F.from_user.id.in_(set(ADMIN_IDS)), Command("del"))
+async def handle_delete_file(message: types.Message):
+    args = message.text.split(" ", 1)
+    if len(args) < 2:
+        await message.answer("⚠️ Usage: `/del <file_code>`", parse_mode="Markdown")
+        return
+
+    file_code = args[1].strip()
+    try:
+        # Check if exists
+        res = supabase.table("files").select("*").eq("file_code", file_code).execute()
+        if not res.data:
+            await message.answer(f"❌ File with code `{file_code}` not found.")
+            return
+
+        # Delete
+        supabase.table("files").delete().eq("file_code", file_code).execute()
+        # Note: We don't delete from the private channel to keep it as a backup
+        await message.answer(f"✅ File `{file_code}` deleted from bot database.")
+    except Exception as e:
+        log.error(f"Error deleting file: {e}")
+        await message.answer("❌ Error deleting file.")
+
+
+# ── Admin: Stats ────────────────────────────────────────────────────────────
+@dp.message(F.from_user.id.in_(set(ADMIN_IDS)), Command("stats"))
+async def handle_stats(message: types.Message):
+    try:
+        # Get counts
+        files_res = supabase.table("files").select("id", count="exact").execute()
+        sessions_res = supabase.table("user_sessions").select("user_id, status", count="exact").execute()
+
+        total_files = files_res.count
+        all_sessions = sessions_res.data or []
+
+        # Calculate unique users
+        unique_users = len(set(s["user_id"] for s in all_sessions))
+
+        # Calculate status breakdown
+        pending_count = sum(1 for s in all_sessions if s["status"] == "pending")
+        unlocked_count = sum(1 for s in all_sessions if s["status"] == "unlocked")
+
+        await message.answer(
+            f"📊 *Real-time Bot Statistics:*\n\n"
+            f"👥 Total Unique Users: *{unique_users}*\n"
+            f"⏳ Users Currently Waiting (Pending): *{pending_count}*\n"
+            f"🔓 Total Successful Unlocks: *{unlocked_count}*\n\n"
+            f"📁 Total Files Uploaded: *{total_files}*",
+            parse_mode="Markdown"
+        )
+    except Exception as e:
+        log.error(f"Error fetching stats: {e}")
+        await message.answer("❌ Error fetching statistics.")
+
+
 # ── Catch-all for unauthorized users ─────────────────────────────────────────
 @dp.message(~F.from_user.id.in_(set(ADMIN_IDS)))
 async def handle_unauthorized(message: types.Message):
-    if message.text and message.text.startswith("/start"):
-        return  # Let /start handle it
-    await message.answer(
-        f"⚠️ You are not an admin.\nYour Telegram ID: `{message.from_user.id}`",
-        parse_mode="Markdown"
-    )
+    if message.text and (message.text.startswith("/start") or message.text.startswith("/stats") or message.text.startswith("/files") or message.text.startswith("/del")):
+        if message.text.startswith("/start"):
+            return
+        await message.answer(
+            f"⚠️ You are not an admin.\nYour Telegram ID: `{message.from_user.id}`",
+            parse_mode="Markdown"
+        )
+        return
+    # Silently ignore other messages or send warning
 
 
 # ==========================================
@@ -295,13 +380,18 @@ async def handle_ad_completed(request):
                         pass  # Ignore if already deleted
 
                 # Send the unlocked video
-                await bot.copy_message(
+                sent_video = await bot.copy_message(
                     chat_id=user_id,
                     from_chat_id=PRIVATE_CHANNEL_ID,
                     message_id=file_data["message_id"],
                     caption="🎉 *Unlocked!* Here is your file.\n\n⚠️ Expires in 30 minutes.",
                     parse_mode="Markdown"
                 )
+
+                # Save the video message ID for later deletion
+                supabase.table("user_sessions").update({
+                    "file_message_id": sent_video.message_id
+                }).eq("id", session_id).execute()
             except Exception as e:
                 log.error(f"Error sending file: {e}")
 
@@ -375,8 +465,45 @@ def keep_awake_pinger():
             pass
 
 
+async def deletion_cleanup_loop():
+    """Background task to delete expired files from user chats."""
+    log.info("🧹 Deletion cleanup loop started")
+    while True:
+        try:
+            # Find unlocked sessions that have expired and have a message ID to delete
+            now = datetime.now(timezone.utc).isoformat()
+            res = supabase.table("user_sessions").select("*")\
+                .eq("status", "unlocked")\
+                .lt("expires_at", now)\
+                .not_.is_("file_message_id", "null")\
+                .execute()
+
+            if res.data:
+                for session in res.data:
+                    user_id = session["user_id"]
+                    msg_id = session["file_message_id"]
+                    session_id = session["id"]
+
+                    log.info(f"Attempting to delete expired message {msg_id} for user {user_id}")
+                    try:
+                        await bot.delete_message(chat_id=user_id, message_id=msg_id)
+                    except Exception as de:
+                        log.warning(f"Could not delete message {msg_id}: {de}")
+
+                    # Clear the message ID in DB so we don't try again
+                    supabase.table("user_sessions").update({
+                        "file_message_id": None
+                    }).eq("id", session_id).execute()
+
+        except Exception as e:
+            log.error(f"Error in deletion loop: {e}")
+
+        await asyncio.sleep(60)  # Check every minute
+
+
 async def main():
     threading.Thread(target=keep_awake_pinger, daemon=True).start()
+    asyncio.create_task(deletion_cleanup_loop())
     await start_web_server()
     log.info(f"🤖 Bot starting... (Admins: {ADMIN_IDS})")
     await dp.start_polling(bot)
