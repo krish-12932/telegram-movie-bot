@@ -579,7 +579,7 @@ async def deletion_cleanup_loop():
             res = supabase.table("user_sessions").select("*")\
                 .eq("status", "unlocked")\
                 .lt("expires_at", now)\
-                .neq("file_message_id", None)\
+                .is_not("file_message_id", "null")\
                 .execute()
 
             if res.data:
