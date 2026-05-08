@@ -147,25 +147,26 @@ async def handle_start(message: types.Message):
                     log.error(f"Error resetting session: {e}")
                     return
         
-        # Send the file
-        try:
-            sent_video = await bot.copy_message(
-                chat_id=user_id,
-                from_chat_id=PRIVATE_CHANNEL_ID,
-                message_id=file_data["message_id"],
-                caption=f"🎉 *Unlocked!* Here is your file.\n\n⚠️ Expires in {EXPIRY_MINUTES} minutes.",
-                parse_mode="Markdown"
-            )
-            
-            # Save message ID for auto-deletion
-            supabase.table("user_sessions").update({
-                "file_message_id": sent_video.message_id
-            }).eq("id", session_id).execute()
-            
-        except Exception as e:
-            log.error(f"Error sending file: {e}")
-            await message.answer("❌ Could not send the file. Contact admin.")
-        return
+        if status == "unlocked":
+            # Send the file
+            try:
+                sent_video = await bot.copy_message(
+                    chat_id=user_id,
+                    from_chat_id=PRIVATE_CHANNEL_ID,
+                    message_id=file_data["message_id"],
+                    caption=f"🎉 *Unlocked!* Here is your file.\n\n⚠️ Expires in {EXPIRY_MINUTES} minutes.",
+                    parse_mode="Markdown"
+                )
+                
+                # Save message ID for auto-deletion
+                supabase.table("user_sessions").update({
+                    "file_message_id": sent_video.message_id
+                }).eq("id", session_id).execute()
+                
+            except Exception as e:
+                log.error(f"Error sending file: {e}")
+                await message.answer("❌ Could not send the file. Contact admin.")
+            return
 
     # Still pending - show ad button
     app_url = f"{WEB_DOMAIN}/?session={session_id}"
