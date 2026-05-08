@@ -31,7 +31,8 @@ PORT               = int(os.getenv("PORT", 8080))
 
 admin_ids_str = os.getenv("ADMIN_IDS", "")
 ADMIN_IDS = [int(x.strip()) for x in admin_ids_str.split(",") if x.strip().isdigit()]
-log.info(f"Loaded ADMIN_IDS: {ADMIN_IDS}")
+EXPIRY_MINUTES = int(os.getenv("EXPIRY_MINUTES", 30))
+log.info(f"Loaded ADMIN_IDS: {ADMIN_IDS} | Expiry: {EXPIRY_MINUTES}m")
 
 # ── Init Bot, Dispatcher, Supabase ──────────────────────────────────────────
 bot = Bot(token=BOT_TOKEN)
@@ -107,7 +108,7 @@ async def handle_start(message: types.Message):
     # --- NEW: Direct Unlock if 0 Ads ---
     if status == "pending" and required_ads == 0:
         now = datetime.now(timezone.utc)
-        expires_at = now + timedelta(minutes=30)
+        expires_at = now + timedelta(minutes=EXPIRY_MINUTES)
         
         # Update session to unlocked
         supabase.table("user_sessions").update({
@@ -116,7 +117,10 @@ async def handle_start(message: types.Message):
             "expires_at": expires_at.isoformat()
         }).eq("id", session_id).execute()
         
-        status = "unlocked" # Continue to the next block to send file
+        status = "unlocked"
+        # Fix Bug 2: Update local session dict for the next block
+        session["status"] = "unlocked"
+        session["expires_at"] = expires_at.isoformat()
     # -----------------------------------
 
     if status == "unlocked":
@@ -124,8 +128,23 @@ async def handle_start(message: types.Message):
         if expires_at_str:
             expires_at = datetime.fromisoformat(expires_at_str.replace("Z", "+00:00"))
             if datetime.now(timezone.utc) > expires_at:
-                await message.answer("⏰ Your 30-minute access to this file has expired.")
-                return
+                await message.answer(f"⏰ Your {EXPIRY_MINUTES}-minute access to this file has expired.\n\nWatch ads again to unlock.")
+                # Fix Bug 1: Reset session to pending
+                try:
+                    supabase.table("user_sessions").update({
+                        "status": "pending",
+                        "ads_watched": 0,
+                        "unlocked_at": None,
+                        "expires_at": None,
+                        "file_message_id": None
+                    }).eq("id", session_id).execute()
+                    
+                    status = "pending"
+                    ads_watched = 0
+                    # Let it fall through to the pending block
+                except Exception as e:
+                    log.error(f"Error resetting session: {e}")
+                    return
         
         # Send the file
         try:
@@ -133,7 +152,7 @@ async def handle_start(message: types.Message):
                 chat_id=user_id,
                 from_chat_id=PRIVATE_CHANNEL_ID,
                 message_id=file_data["message_id"],
-                caption="🎉 *Unlocked!* Here is your file.\n\n⚠️ Expires in 30 minutes.",
+                caption=f"🎉 *Unlocked!* Here is your file.\n\n⚠️ Expires in {EXPIRY_MINUTES} minutes.",
                 parse_mode="Markdown"
             )
             
@@ -214,7 +233,7 @@ async def handle_help(message: types.Message):
             "• `/start` - Welcome message\n"
             "• `/start <code>` - Use a link to get a file\n"
             "• `/help` - Show this menu\n\n"
-            "Note: Files expire 30 minutes after unlocking."
+            f"Note: Files expire {EXPIRY_MINUTES} minutes after unlocking."
         )
     
     await message.answer(help_text, parse_mode="Markdown")
@@ -446,7 +465,7 @@ async def handle_ad_completed(request):
 
         if ads_watched >= required_ads:
             now        = datetime.now(timezone.utc)
-            expires_at = now + timedelta(minutes=30)
+            expires_at = now + timedelta(minutes=EXPIRY_MINUTES)
 
             supabase.table("user_sessions").update({
                 "ads_watched": ads_watched,
@@ -469,7 +488,7 @@ async def handle_ad_completed(request):
                     chat_id=user_id,
                     from_chat_id=PRIVATE_CHANNEL_ID,
                     message_id=file_data["message_id"],
-                    caption="🎉 *Unlocked!* Here is your file.\n\n⚠️ Expires in 30 minutes.",
+                    caption=f"🎉 *Unlocked!* Here is your file.\n\n⚠️ Expires in {EXPIRY_MINUTES} minutes.",
                     parse_mode="Markdown"
                 )
 
@@ -560,7 +579,7 @@ async def deletion_cleanup_loop():
             res = supabase.table("user_sessions").select("*")\
                 .eq("status", "unlocked")\
                 .lt("expires_at", now)\
-                .not_.is_("file_message_id", "null")\
+                .neq("file_message_id", None)\
                 .execute()
 
             if res.data:
