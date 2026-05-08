@@ -108,7 +108,8 @@ async def handle_start(message: types.Message):
     # --- NEW: Direct Unlock if 0 Ads ---
     if status == "pending" and required_ads == 0:
         now = datetime.now(timezone.utc)
-        expires_at = now + timedelta(minutes=EXPIRY_MINUTES)
+        file_expiry = file_data.get("expiry_minutes") or EXPIRY_MINUTES
+        expires_at = now + timedelta(minutes=file_expiry)
         
         # Update session to unlocked
         supabase.table("user_sessions").update({
@@ -268,13 +269,28 @@ async def handle_admin_file(message: types.Message, state: FSMContext):
 # ── Admin: Set ads count ──────────────────────────────────────────────────────
 @dp.message(F.from_user.id.in_(set(ADMIN_IDS)), AdminStates.waiting_for_ads_count)
 async def handle_ads_count(message: types.Message, state: FSMContext):
-    if not message.text or not message.text.strip().isdigit():
-        await message.answer("❌ Please send a valid number (e.g. `1`, `2`, `3`).", parse_mode="Markdown")
+    input_text = message.text.strip() if message.text else ""
+    
+    # Support "Ads | Name | Time" format
+    parts = [p.strip() for p in input_text.split("|")]
+    ads_part = parts[0] if len(parts) > 0 else ""
+    custom_name = parts[1] if len(parts) > 1 else None
+    custom_expiry = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else EXPIRY_MINUTES
+
+    if not ads_part.isdigit():
+        await message.answer(
+            "❌ Please send a valid format.\n"
+            "• `3` (Only Ads)\n"
+            "• `3 | Movie Name` (Ads + Name)\n"
+            "• `3 | Movie Name | 60` (Ads + Name + Expiry in minutes)",
+            parse_mode="Markdown"
+        )
         return
 
-    required_ads = int(message.text.strip())
+    required_ads = int(ads_part)
     data = await state.get_data()
     original_message_id = data.get("original_message_id")
+    file_name = custom_name if custom_name else data.get("file_name", "Unknown")
     await state.clear()
 
     # Forward file to private channel
@@ -298,7 +314,8 @@ async def handle_ads_count(message: types.Message, state: FSMContext):
             "file_code":    file_code,
             "message_id":   channel_message_id,
             "required_ads": required_ads,
-            "file_name":    file_name
+            "file_name":    file_name,
+            "expiry_minutes": custom_expiry
         }).execute()
 
         me = await bot.get_me()
@@ -465,7 +482,8 @@ async def handle_ad_completed(request):
 
         if ads_watched >= required_ads:
             now        = datetime.now(timezone.utc)
-            expires_at = now + timedelta(minutes=EXPIRY_MINUTES)
+            file_expiry = file_data.get("expiry_minutes") or EXPIRY_MINUTES
+            expires_at = now + timedelta(minutes=file_expiry)
 
             supabase.table("user_sessions").update({
                 "ads_watched": ads_watched,
@@ -579,7 +597,7 @@ async def deletion_cleanup_loop():
             res = supabase.table("user_sessions").select("*")\
                 .eq("status", "unlocked")\
                 .lt("expires_at", now)\
-                .is_not("file_message_id", "null")\
+                .not_.is_("file_message_id", "null")\
                 .execute()
 
             if res.data:
