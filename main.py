@@ -105,32 +105,17 @@ async def handle_start(message: types.Message):
     ads_watched  = session["ads_watched"]
     required_ads = file_data["required_ads"]
 
-    # --- NEW: Direct Unlock if 0 Ads ---
-    if status == "pending" and required_ads == 0:
-        now = datetime.now(timezone.utc)
-        file_expiry = file_data.get("expiry_minutes") or EXPIRY_MINUTES
-        expires_at = now + timedelta(minutes=file_expiry)
-        
-        # Update session to unlocked
-        supabase.table("user_sessions").update({
-            "status": "unlocked",
-            "unlocked_at": now.isoformat(),
-            "expires_at": expires_at.isoformat()
-        }).eq("id", session_id).execute()
-        
-        status = "unlocked"
-        # Fix Bug 2: Update local session dict for the next block
-        session["status"] = "unlocked"
-        session["expires_at"] = expires_at.isoformat()
-    # -----------------------------------
-
+    # 2. If unlocked, check for expiry
     if status == "unlocked":
         expires_at_str = session.get("expires_at")
         if expires_at_str:
             expires_at = datetime.fromisoformat(expires_at_str.replace("Z", "+00:00"))
+            file_expiry = file_data.get("expiry_minutes") or EXPIRY_MINUTES
+            
             if datetime.now(timezone.utc) > expires_at:
-                await message.answer(f"⏰ Your {EXPIRY_MINUTES}-minute access to this file has expired.\n\nWatch ads again to unlock.")
-                # Fix Bug 1: Reset session to pending
+                exp_msg = await message.answer(f"⏰ Your {file_expiry}-minute access to this file has expired.\n\nRenewing access...")
+                
+                # Reset session to pending in DB
                 try:
                     supabase.table("user_sessions").update({
                         "status": "pending",
@@ -142,31 +127,55 @@ async def handle_start(message: types.Message):
                     
                     status = "pending"
                     ads_watched = 0
-                    # Let it fall through to the pending block
+                    
+                    # Delete the expired message after 3 seconds
+                    await asyncio.sleep(3)
+                    try:
+                        await exp_msg.delete()
+                    except:
+                        pass
+                        
                 except Exception as e:
                     log.error(f"Error resetting session: {e}")
                     return
+
+    # 3. If pending and 0 ads, auto-unlock
+    if status == "pending" and required_ads == 0:
+        now = datetime.now(timezone.utc)
+        file_expiry = file_data.get("expiry_minutes") or EXPIRY_MINUTES
+        expires_at = now + timedelta(minutes=file_expiry)
         
-        if status == "unlocked":
-            # Send the file
-            try:
-                sent_video = await bot.copy_message(
-                    chat_id=user_id,
-                    from_chat_id=PRIVATE_CHANNEL_ID,
-                    message_id=file_data["message_id"],
-                    caption=f"🎉 *Unlocked!* Here is your file.\n\n⚠️ Expires in {EXPIRY_MINUTES} minutes.",
-                    parse_mode="Markdown"
-                )
-                
-                # Save message ID for auto-deletion
-                supabase.table("user_sessions").update({
-                    "file_message_id": sent_video.message_id
-                }).eq("id", session_id).execute()
-                
-            except Exception as e:
-                log.error(f"Error sending file: {e}")
-                await message.answer("❌ Could not send the file. Contact admin.")
+        supabase.table("user_sessions").update({
+            "status": "unlocked",
+            "unlocked_at": now.isoformat(),
+            "expires_at": expires_at.isoformat()
+        }).eq("id", session_id).execute()
+        
+        status = "unlocked"
+
+    # 4. If unlocked, send the file
+    if status == "unlocked":
+        file_expiry = file_data.get("expiry_minutes") or EXPIRY_MINUTES
+        try:
+            sent_video = await bot.copy_message(
+                chat_id=user_id,
+                from_chat_id=PRIVATE_CHANNEL_ID,
+                message_id=file_data["message_id"],
+                caption=f"🎉 *Unlocked!* Here is your file.\n\n⚠️ Expires in {file_expiry} minutes.",
+                parse_mode="Markdown"
+            )
+            
+            supabase.table("user_sessions").update({
+                "file_message_id": sent_video.message_id
+            }).eq("id", session_id).execute()
+            
             return
+        except Exception as e:
+            log.error(f"Error sending file: {e}")
+            await message.answer("❌ Could not send the file. Contact admin.")
+            return
+
+    # 5. Still pending, show ad button
 
     # Still pending - show ad button
     app_url = f"{WEB_DOMAIN}/?session={session_id}"
@@ -309,7 +318,6 @@ async def handle_ads_count(message: types.Message, state: FSMContext):
 
     # Save to Supabase
     file_code = shortuuid.uuid()[:8]
-    file_name = data.get("file_name", "Unknown")
     try:
         supabase.table("files").insert({
             "file_code":    file_code,
