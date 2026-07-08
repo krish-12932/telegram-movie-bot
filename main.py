@@ -84,6 +84,9 @@ async def init_db():
 class AdminStates(StatesGroup):
     waiting_for_ads_count = State()
 
+class UserStates(StatesGroup):
+    searching = State()
+
 # ==========================================
 # BOT HANDLERS
 # ==========================================
@@ -471,18 +474,215 @@ async def handle_stats(message: types.Message):
 
 
 
-# ── Catch-all for unauthorized users ─────────────────────────────────────────
-@dp.message(~F.from_user.id.in_(set(ADMIN_IDS)))
-async def handle_unauthorized(message: types.Message):
-    if message.text and (message.text.startswith("/start") or message.text.startswith("/stats") or message.text.startswith("/files") or message.text.startswith("/del") or message.text.startswith("/help")):
-        if message.text.startswith("/start") or message.text.startswith("/help"):
+# ── Helper: deliver file to user (with or without ads) ──────────────────────
+async def deliver_file_to_user(user_id: int, file_data: dict, is_admin: bool, message: types.Message):
+    """Admin gets file directly. Regular users go through ad session."""
+    file_code = file_data["file_code"]
+
+    # ADMIN: send directly without ads
+    if is_admin:
+        try:
+            await bot.copy_message(
+                chat_id=user_id,
+                from_chat_id=PRIVATE_CHANNEL_ID,
+                message_id=file_data["message_id"],
+                caption=f"🎬 *{file_data.get('file_name', 'File')}*\n\n✅ Admin Access — No Ads",
+                parse_mode="Markdown"
+            )
+        except Exception as e:
+            log.error(f"Error sending file to admin: {e}")
+            await message.answer("❌ Could not send the file.")
+        return
+
+    # REGULAR USER: get or create session then show ad button
+    required_ads = file_data.get("required_ads", 1)
+    try:
+        session_res = supabase.table("user_sessions").select("*")\
+            .eq("user_id", user_id).eq("file_code", file_code).execute()
+
+        if not session_res.data:
+            inserted = supabase.table("user_sessions").insert({
+                "user_id":    user_id,
+                "file_code":  file_code,
+                "ads_watched": 0,
+                "status":     "pending"
+            }).execute()
+            session = inserted.data[0]
+        else:
+            session = session_res.data[0]
+    except Exception as e:
+        log.error(f"Error creating session: {e}")
+        await message.answer("❌ An error occurred.")
+        return
+
+    session_id  = session["id"]
+    status      = session["status"]
+    ads_watched = session["ads_watched"]
+
+    # Check expiry if already unlocked
+    if status == "unlocked":
+        expires_at_str = session.get("expires_at")
+        if expires_at_str:
+            expires_at = datetime.fromisoformat(expires_at_str.replace("Z", "+00:00"))
+            if datetime.now(timezone.utc) > expires_at:
+                supabase.table("user_sessions").update({
+                    "status": "pending", "ads_watched": 0,
+                    "unlocked_at": None, "expires_at": None, "file_message_id": None
+                }).eq("id", session_id).execute()
+                status = "pending"
+                ads_watched = 0
+
+    # Auto-unlock if 0 ads required
+    if status == "pending" and required_ads == 0:
+        now = datetime.now(timezone.utc)
+        file_expiry = file_data.get("expiry_minutes") or EXPIRY_MINUTES
+        supabase.table("user_sessions").update({
+            "status": "unlocked",
+            "unlocked_at": now.isoformat(),
+            "expires_at": (now + timedelta(minutes=file_expiry)).isoformat()
+        }).eq("id", session_id).execute()
+        status = "unlocked"
+
+    # Send file if unlocked
+    if status == "unlocked":
+        file_expiry = file_data.get("expiry_minutes") or EXPIRY_MINUTES
+        try:
+            sent_video = await bot.copy_message(
+                chat_id=user_id,
+                from_chat_id=PRIVATE_CHANNEL_ID,
+                message_id=file_data["message_id"],
+                caption=f"🎉 *Unlocked!* Here is your file.\n\n⚠️ Expires in {file_expiry} minutes.",
+                parse_mode="Markdown"
+            )
+            supabase.table("user_sessions").update(
+                {"file_message_id": sent_video.message_id}
+            ).eq("id", session_id).execute()
+        except Exception as e:
+            log.error(f"Error sending file: {e}")
+            await message.answer("❌ Could not send the file.")
+        return
+
+    # Show ad button
+    app_url = f"{WEB_DOMAIN}/?session={session_id}"
+    markup = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(
+            text=f"🎁 Watch Ad ({ads_watched}/{required_ads}) to Unlock",
+            web_app=WebAppInfo(url=app_url)
+        )
+    ]])
+    locked_text = (
+        f"🔒 *{file_data.get('file_name', 'File')} — Locked!*\n\n"
+        f"Watch *{required_ads} ad(s)* to unlock this file.\n"
+        f"Progress: {ads_watched}/{required_ads} ads watched.\n\n"
+        f"Tap below to watch an ad 👇"
+    )
+    existing_msg_id = session.get("bot_message_id")
+    if existing_msg_id:
+        try:
+            await bot.edit_message_text(
+                chat_id=user_id, message_id=existing_msg_id,
+                text=locked_text, parse_mode="Markdown", reply_markup=markup
+            )
             return
+        except Exception:
+            pass
+    sent = await message.answer(locked_text, parse_mode="Markdown", reply_markup=markup)
+    try:
+        supabase.table("user_sessions").update(
+            {"bot_message_id": sent.message_id}
+        ).eq("id", session_id).execute()
+    except Exception as e:
+        log.warning(f"Could not save bot_message_id: {e}")
+
+
+# ── User: Movie Name Search ────────────────────────────────────────────────────
+@dp.message(F.text & ~F.text.startswith("/"))
+async def handle_text_search(message: types.Message):
+    if not supabase:
+        await message.answer("❌ Database not configured.")
+        return
+
+    user_id  = message.from_user.id
+    is_admin = user_id in ADMIN_IDS
+    query    = message.text.strip()
+
+    if len(query) < 2:
+        await message.answer("🔍 Please type at least 2 characters to search.")
+        return
+
+    try:
+        # Case-insensitive partial match using ilike
+        res = supabase.table("files").select("*").ilike("file_name", f"%{query}%").limit(10).execute()
+    except Exception as e:
+        log.error(f"Search error: {e}")
+        await message.answer("❌ Search failed. Try again.")
+        return
+
+    if not res.data:
         await message.answer(
-            f"⚠️ You are not an admin.\nYour Telegram ID: `{message.from_user.id}`",
+            f"🔍 No results found for *{query}*\n\n"
+            "Try a different keyword (e.g., `Bahubali`, `KGF`, `RRR`)",
             parse_mode="Markdown"
         )
         return
-    # Silently ignore other messages or send warning
+
+    results = res.data
+
+    # If only 1 result, deliver directly
+    if len(results) == 1:
+        await deliver_file_to_user(user_id, results[0], is_admin, message)
+        return
+
+    # Multiple results — show inline buttons
+    buttons = []
+    for f in results:
+        name    = f.get("file_name") or "Unnamed"
+        code    = f["file_code"]
+        ads_req = f.get("required_ads", 1)
+        label   = f"🎬 {name}" + (" [FREE]" if ads_req == 0 else f" [{ads_req} Ads]")
+        buttons.append([InlineKeyboardButton(
+            text=label[:60],
+            callback_data=f"get_file:{code}"
+        )])
+
+    markup = InlineKeyboardMarkup(inline_keyboard=buttons)
+    await message.answer(
+        f"🔍 Found *{len(results)}* result(s) for \"*{query}*\":\n\nSelect the file you want 👇",
+        parse_mode="Markdown",
+        reply_markup=markup
+    )
+
+
+# ── Callback: User selects a file from search results ────────────────────────
+@dp.callback_query(F.data.startswith("get_file:"))
+async def handle_file_selection(callback: types.CallbackQuery):
+    if not supabase:
+        await callback.answer("Database error", show_alert=True)
+        return
+
+    file_code = callback.data.split(":", 1)[1]
+    user_id   = callback.from_user.id
+    is_admin  = user_id in ADMIN_IDS
+
+    try:
+        res = supabase.table("files").select("*").eq("file_code", file_code).execute()
+        if not res.data:
+            await callback.answer("❌ File not found!", show_alert=True)
+            return
+        file_data = res.data[0]
+    except Exception as e:
+        log.error(f"Error fetching file on callback: {e}")
+        await callback.answer("❌ Error occurred.", show_alert=True)
+        return
+
+    await callback.answer()  # Dismiss loading spinner
+    # Edit the search results message away to keep chat clean
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
+
+    await deliver_file_to_user(user_id, file_data, is_admin, callback.message)
 
 
 # ==========================================
@@ -676,3 +876,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+    
