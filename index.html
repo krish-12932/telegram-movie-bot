@@ -168,8 +168,7 @@
             }
         }
     </style>
-    <!-- Ad Network SDK -->
-    <script src='//libtl.com/sdk.js' data-zone='9545978' data-sdk='show_9545978'></script>
+    <!-- Ad Network SDK (Monetag) -->
     <script src='//libtl.com/sdk.js' data-zone='11255140' data-sdk='show_11255140'></script>
 
     <!-- Clickadilla Anti-AdBlock Banner Manager SDK -->
@@ -236,26 +235,30 @@
             document.getElementById('subtitleText').textContent = 'Session missing. Please open from Telegram Bot.';
         }
 
-        function watchAd() {
+        async function watchAd() {
             if (!sessionId) return;
 
             startBtn.disabled = true;
             startBtn.textContent = '⏳ Loading Ad...';
             adLabel.textContent = 'Loading Sponsor...';
 
-            const adFunctions = ['show_9545978', 'show_11255140'];
-            const randomAdFunction = adFunctions[Math.floor(Math.random() * adFunctions.length)];
+            // Wait up to 5 seconds for the Monetag SDK to load
+            let waitTime = 0;
+            while (typeof window.show_11255140 !== 'function' && waitTime < 5000) {
+                await new Promise(r => setTimeout(r, 200));
+                waitTime += 200;
+            }
 
-            if (typeof window[randomAdFunction] === 'function') {
-                window[randomAdFunction]()
+            if (typeof window.show_11255140 === 'function') {
+                window.show_11255140()
                     .then(() => completeAd())
                     .catch(err => {
                         console.error('Ad Error:', err);
-                        Telegram.WebApp.showAlert('Ad failed to load. Please disable AdBlocker and try again.');
+                        Telegram.WebApp.showAlert('Ad failed to load. It might be blocked or unavailable right now.');
                         resetBtn();
                     });
             } else {
-                Telegram.WebApp.showAlert('Ad SDK not found. Please refresh or disable AdBlock.');
+                Telegram.WebApp.showAlert('Ad SDK could not load. Please check your internet or disable AdBlock.');
                 resetBtn();
             }
         }
