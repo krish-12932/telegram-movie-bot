@@ -1,5 +1,7 @@
 aiogram==3.7.0
 aiohttp==3.9.5
-supabase==1.2.0
+motor
 python-dotenv
 shortuuid
+aiosqlite
+supabase
