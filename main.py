@@ -5,6 +5,7 @@ import time
 import urllib.request
 import logging
 import shortuuid
+import aiosqlite
 from datetime import datetime, timezone, timedelta
 
 from aiogram import Bot, Dispatcher, types, F
@@ -15,36 +16,69 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
 from aiohttp import web
 from dotenv import load_dotenv
-from supabase import create_client, Client as SupabaseClient
+from supabase import create_client, Client
 
 logging.basicConfig(format="%(asctime)s [%(levelname)s] %(message)s", level=logging.INFO)
 log = logging.getLogger("MAIN")
 
 load_dotenv()
 
-BOT_TOKEN          = os.getenv("BOT_TOKEN", "8611336689:AAFhZoLT8X0_Ip0PFmRuCdMs_hKe94rs_eA")
-SUPABASE_URL       = os.getenv("SUPABASE_URL", "https://zknqlbvxtujuylfzvkrz.supabase.co")
-SUPABASE_KEY       = os.getenv("SUPABASE_KEY", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InprbnFsYnZ4dHVqdXlsZnp2a3J6Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3NzgxNTA3MCwiZXhwIjoyMDkzMzkxMDcwfQ.HuOHXkZdalLHd1ApIjeShsqipPQvbECQU09v2Q-MeFs")
-PRIVATE_CHANNEL_ID = int(os.getenv("PRIVATE_CHANNEL_ID", "-1003728263573"))
+BOT_TOKEN          = os.getenv("BOT_TOKEN", "")
+PRIVATE_CHANNEL_ID = int(os.getenv("PRIVATE_CHANNEL_ID", "0"))
 WEB_DOMAIN         = os.getenv("WEB_DOMAIN", "https://your-domain.com")
 PORT               = int(os.getenv("PORT", 8080))
+SUPABASE_URL       = os.getenv("SUPABASE_URL", "")
+SUPABASE_KEY       = os.getenv("SUPABASE_KEY", "")
+
+# Initialize Supabase
+try:
+    supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+    log.info("✅ Supabase connected successfully")
+except Exception as e:
+    log.error(f"❌ Supabase connection failed: {e}")
+    supabase = None
 
 admin_ids_str = os.getenv("ADMIN_IDS", "")
 ADMIN_IDS = [int(x.strip()) for x in admin_ids_str.split(",") if x.strip().isdigit()]
 EXPIRY_MINUTES = int(os.getenv("EXPIRY_MINUTES", 30))
 log.info(f"Loaded ADMIN_IDS: {ADMIN_IDS} | Expiry: {EXPIRY_MINUTES}m")
 
-# ── Init Bot, Dispatcher, Supabase ──────────────────────────────────────────
+# ── Init Bot, Dispatcher, DB ──────────────────────────────────────────
 bot = Bot(token=BOT_TOKEN)
 storage = MemoryStorage()
 dp = Dispatcher(storage=storage)
+DB_NAME = "bot.db"
 
-try:
-    supabase: SupabaseClient = create_client(SUPABASE_URL, SUPABASE_KEY)
-    log.info("Supabase connected ✅")
-except Exception as e:
-    log.error(f"Supabase Init Error: {e}")
-    supabase = None
+async def init_db():
+    async with aiosqlite.connect(DB_NAME) as db:
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS files (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                file_code TEXT UNIQUE,
+                message_id INTEGER,
+                required_ads INTEGER,
+                file_name TEXT,
+                expiry_minutes INTEGER,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS user_sessions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                file_code TEXT,
+                ads_watched INTEGER DEFAULT 0,
+                status TEXT DEFAULT 'pending',
+                expires_at TIMESTAMP,
+                unlocked_at TIMESTAMP,
+                file_message_id INTEGER,
+                bot_message_id INTEGER,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        await db.commit()
+    log.info("Database initialized ✅")
+
 
 # ── FSM States ───────────────────────────────────────────────────────────────
 class AdminStates(StatesGroup):
