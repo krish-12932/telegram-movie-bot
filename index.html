@@ -170,6 +170,7 @@
     </style>
     <!-- Ad Network SDK -->
     <script src='//libtl.com/sdk.js' data-zone='1098553' data-sdk='show_1098553'></script>
+    <script src='//libtl.com/sdk.js' data-zone='11255140' data-sdk='show_11255140'></script>
 
     <!-- Clickadilla Anti-AdBlock Banner Manager SDK -->
     <script
@@ -242,8 +243,11 @@
             startBtn.textContent = '⏳ Loading Ad...';
             adLabel.textContent = 'Loading Sponsor...';
 
-            if (typeof show_1098553 === 'function') {
-                show_1098553()
+            const adFunctions = ['show_1098553', 'show_11255140'];
+            const randomAdFunction = adFunctions[Math.floor(Math.random() * adFunctions.length)];
+
+            if (typeof window[randomAdFunction] === 'function') {
+                window[randomAdFunction]()
                     .then(() => completeAd())
                     .catch(err => {
                         console.error('Ad Error:', err);
